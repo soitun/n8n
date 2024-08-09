@@ -24,6 +24,7 @@ export class NDV extends BasePage {
 		editPinnedDataButton: () => cy.getByTestId('ndv-edit-pinned-data'),
 		pinnedDataEditor: () => this.getters.outputPanel().find('.cm-editor .cm-scroller .cm-content'),
 		runDataPaneHeader: () => cy.getByTestId('run-data-pane-header'),
+		aiOutputModeToggle: () => cy.getByTestId('ai-output-mode-select'),
 		nodeOutputHint: () => cy.getByTestId('ndv-output-run-node-hint'),
 		savePinnedDataButton: () =>
 			this.getters.runDataPaneHeader().find('button').filter(':visible').contains('Save'),
@@ -77,6 +78,7 @@ export class NDV extends BasePage {
 		resourceLocatorDropdown: (paramName: string) =>
 			this.getters.resourceLocator(paramName).find('[data-test-id="resource-locator-dropdown"]'),
 		resourceLocatorErrorMessage: () => cy.getByTestId('rlc-error-container'),
+		resourceLocatorAddCredentials: () => this.getters.resourceLocatorErrorMessage().find('a'),
 		resourceLocatorModeSelector: (paramName: string) =>
 			this.getters.resourceLocator(paramName).find('[data-test-id="rlc-mode-selector"]'),
 		resourceLocatorSearch: (paramName: string) =>

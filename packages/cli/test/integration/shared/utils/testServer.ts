@@ -145,8 +145,10 @@ export const setupTestServer = ({
 						break;
 
 					case 'metrics':
-						const { MetricsService } = await import('@/services/metrics.service');
-						await Container.get(MetricsService).configureMetrics(app);
+						const { PrometheusMetricsService } = await import(
+							'@/metrics/prometheus-metrics.service'
+						);
+						await Container.get(PrometheusMetricsService).init(app);
 						break;
 
 					case 'eventBus':
@@ -157,13 +159,17 @@ export const setupTestServer = ({
 						await import('@/controllers/auth.controller');
 						break;
 
+					case 'oauth2':
+						await import('@/controllers/oauth/oAuth2Credential.controller');
+						break;
+
 					case 'mfa':
 						await import('@/controllers/mfa.controller');
 						break;
 
 					case 'ldap':
-						const { LdapService } = await import('@/Ldap/ldap.service');
-						await import('@/Ldap/ldap.controller');
+						const { LdapService } = await import('@/Ldap/ldap.service.ee');
+						await import('@/Ldap/ldap.controller.ee');
 						testServer.license.enable('feat:ldap');
 						await Container.get(LdapService).init();
 						break;
