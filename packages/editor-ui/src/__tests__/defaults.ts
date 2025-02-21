@@ -62,7 +62,13 @@ export const defaultSettings: FrontendSettings = {
 		disableSessionRecording: false,
 		enabled: false,
 	},
-	publicApi: { enabled: false, latestVersion: 0, path: '', swaggerUi: { enabled: false } },
+	publicApi: {
+		apiKeysPerUserLimit: 0,
+		enabled: false,
+		latestVersion: 0,
+		path: '',
+		swaggerUi: { enabled: false },
+	},
 	pushBackend: 'websocket',
 	saveDataErrorExecution: 'all',
 	saveDataSuccessExecution: 'all',
@@ -129,6 +135,11 @@ export const defaultSettings: FrontendSettings = {
 		enabled: false,
 		credits: 0,
 	},
-	betaFeatures: [],
 	easyAIWorkflowOnboarded: false,
+	partialExecution: {
+		version: 1,
+	},
+	folders: {
+		enabled: false,
+	},
 };

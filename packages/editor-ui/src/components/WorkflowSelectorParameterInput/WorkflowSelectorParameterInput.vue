@@ -20,8 +20,9 @@ import { useWorkflowResourceLocatorModes } from './useWorkflowResourceLocatorMod
 import { useWorkflowResourcesLocator } from './useWorkflowResourcesLocator';
 import { useProjectsStore } from '@/stores/projects.store';
 import { useTelemetry } from '@/composables/useTelemetry';
-import { NEW_SAMPLE_WORKFLOW_CREATED_CHANNEL } from '@/constants';
+import { VIEWS } from '@/constants';
 import { SAMPLE_SUBWORKFLOW_WORKFLOW } from '@/constants.workflows';
+import type { IWorkflowDataCreate } from '@/Interface';
 
 interface Props {
 	modelValue: INodeParameterResourceLocator;
@@ -34,6 +35,8 @@ interface Props {
 	forceShowExpression?: boolean;
 	parameterIssues?: string[];
 	parameter: INodeProperties;
+	sampleWorkflow?: IWorkflowDataCreate;
+	newResourceLabel?: string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -43,7 +46,9 @@ const props = withDefaults(defineProps<Props>(), {
 	isReadOnly: false,
 	forceShowExpression: false,
 	expressionDisplayValue: '',
+	newResourceLabel: '',
 	parameterIssues: () => [],
+	sampleWorkflow: () => SAMPLE_SUBWORKFLOW_WORKFLOW,
 });
 
 const emit = defineEmits<{
@@ -52,6 +57,7 @@ const emit = defineEmits<{
 	modalOpenerClick: [];
 	focus: [];
 	blur: [];
+	workflowCreated: [workflowId: string];
 }>();
 
 const workflowsStore = useWorkflowsStore();
@@ -100,6 +106,10 @@ const currentProjectName = computed(() => {
 });
 
 const getCreateResourceLabel = computed(() => {
+	if (props.newResourceLabel) {
+		return props.newResourceLabel;
+	}
+
 	if (!currentProjectName.value) {
 		return i18n.baseText('executeWorkflowTrigger.createNewSubworkflow.noProject');
 	}
@@ -205,36 +215,32 @@ onClickOutside(dropdown, () => {
 	isDropdownVisible.value = false;
 });
 
-const onAddResourceClicked = () => {
-	const subWorkflowNameRegex = /My\s+Sub-Workflow\s+\d+/;
-
-	const urlSearchParams = new URLSearchParams();
-
-	if (projectStore.currentProjectId) {
-		urlSearchParams.set('projectId', projectStore.currentProjectId);
-	}
-
+const onAddResourceClicked = async () => {
+	const projectId = projectStore.currentProjectId;
+	const sampleWorkflow = props.sampleWorkflow;
+	const workflowName = sampleWorkflow.name ?? 'My Sub-Workflow';
 	const sampleSubWorkflows = workflowsStore.allWorkflows.filter(
-		(w) => w.name && subWorkflowNameRegex.test(w.name),
+		(w) => w.name && new RegExp(workflowName).test(w.name),
 	);
 
-	urlSearchParams.set('sampleSubWorkflows', sampleSubWorkflows.length.toString());
-
+	const workflow: IWorkflowDataCreate = {
+		...sampleWorkflow,
+		name: `${workflowName} ${sampleSubWorkflows.length + 1}`,
+	};
+	if (projectId) {
+		workflow.projectId = projectId;
+	}
 	telemetry.track('User clicked create new sub-workflow button', {}, { withPostHog: true });
 
-	const sampleSubworkflowChannel = new BroadcastChannel(NEW_SAMPLE_WORKFLOW_CREATED_CHANNEL);
+	const newWorkflow = await workflowsStore.createNewWorkflow(workflow);
+	const { href } = router.resolve({ name: VIEWS.WORKFLOW, params: { name: newWorkflow.id } });
+	await reloadWorkflows();
+	onInputChange(newWorkflow.id);
+	hideDropdown();
 
-	sampleSubworkflowChannel.onmessage = async (event: MessageEvent<{ workflowId: string }>) => {
-		const workflowId = event.data.workflowId;
-		await reloadWorkflows();
-		onInputChange(workflowId);
-		hideDropdown();
-	};
+	window.open(href, '_blank');
 
-	window.open(
-		`/workflows/onboarding/${SAMPLE_SUBWORKFLOW_WORKFLOW.meta.templateId}?${urlSearchParams.toString()}`,
-		'_blank',
-	);
+	emit('workflowCreated', newWorkflow.id);
 };
 </script>
 <template>
@@ -258,6 +264,7 @@ const onAddResourceClicked = () => {
 			}"
 			:width="width"
 			:event-bus="eventBus"
+			:value="modelValue"
 			@update:model-value="onListItemSelected"
 			@filter="onSearchFilter"
 			@load-more="populateNextWorkflowsPage"

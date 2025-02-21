@@ -26,7 +26,11 @@ export function useTestDefinitionForm() {
 			tempValue: [],
 			isEditing: false,
 		},
-		description: '',
+		description: {
+			value: '',
+			tempValue: '',
+			isEditing: false,
+		},
 		evaluationWorkflow: {
 			mode: 'list',
 			value: '',
@@ -37,31 +41,34 @@ export function useTestDefinitionForm() {
 	});
 
 	const isSaving = ref(false);
-	const fieldsIssues = ref<Array<{ field: string; message: string }>>([]);
 	const fields = ref<FormRefs>({} as FormRefs);
 
-	// A computed mapping of editable fields to their states
-	// This ensures TS knows the exact type of each field.
 	const editableFields: ComputedRef<{
 		name: EditableField<string>;
 		tags: EditableField<string[]>;
+		description: EditableField<string>;
 	}> = computed(() => ({
 		name: state.value.name,
 		tags: state.value.tags,
+		description: state.value.description,
 	}));
 
 	/**
 	 * Load test data including metrics.
 	 */
-	const loadTestData = async (testId: string) => {
+	const loadTestData = async (testId: string, workflowId: string) => {
 		try {
-			await evaluationsStore.fetchAll({ force: true });
+			await evaluationsStore.fetchAll({ force: true, workflowId });
 			const testDefinition = evaluationsStore.testDefinitionsById[testId];
 
 			if (testDefinition) {
 				const metrics = await evaluationsStore.fetchMetrics(testId);
 
-				state.value.description = testDefinition.description ?? '';
+				state.value.description = {
+					value: testDefinition.description ?? '',
+					isEditing: false,
+					tempValue: '',
+				};
 				state.value.name = {
 					value: testDefinition.name ?? '',
 					isEditing: false,
@@ -79,6 +86,7 @@ export function useTestDefinitionForm() {
 				};
 				state.value.metrics = metrics;
 				state.value.mockedNodes = testDefinition.mockedNodes ?? [];
+				evaluationsStore.updateRunFieldIssues(testDefinition.id);
 			}
 		} catch (error) {
 			console.error('Failed to load test data', error);
@@ -89,13 +97,12 @@ export function useTestDefinitionForm() {
 		if (isSaving.value) return;
 
 		isSaving.value = true;
-		fieldsIssues.value = [];
 
 		try {
 			const params = {
 				name: state.value.name.value,
 				workflowId,
-				description: state.value.description,
+				description: state.value.description.value,
 			};
 			return await evaluationsStore.create(params);
 		} finally {
@@ -108,6 +115,10 @@ export function useTestDefinitionForm() {
 		state.value.metrics = state.value.metrics.filter((metric) => metric.id !== metricId);
 	};
 
+	/**
+	 * This method would perform unnecessary updates on the BE
+	 * it's a performance degradation candidate if metrics reach certain amount
+	 */
 	const updateMetrics = async (testId: string) => {
 		const promises = state.value.metrics.map(async (metric) => {
 			if (!metric.name) return;
@@ -125,15 +136,15 @@ export function useTestDefinitionForm() {
 				});
 			}
 		});
-
+		isSaving.value = true;
 		await Promise.all(promises);
+		isSaving.value = false;
 	};
 
 	const updateTest = async (testId: string) => {
 		if (isSaving.value) return;
 
 		isSaving.value = true;
-		fieldsIssues.value = [];
 
 		try {
 			if (!testId) {
@@ -142,7 +153,7 @@ export function useTestDefinitionForm() {
 
 			const params: UpdateTestDefinitionParams = {
 				name: state.value.name.value,
-				description: state.value.description,
+				description: state.value.description.value,
 			};
 
 			if (state.value.evaluationWorkflow.value) {
@@ -153,11 +164,10 @@ export function useTestDefinitionForm() {
 			if (annotationTagId) {
 				params.annotationTagId = annotationTagId;
 			}
-			if (state.value.mockedNodes.length > 0) {
-				params.mockedNodes = state.value.mockedNodes;
-			}
+			params.mockedNodes = state.value.mockedNodes;
 
-			return await evaluationsStore.update({ ...params, id: testId });
+			const response = await evaluationsStore.update({ ...params, id: testId });
+			return response;
 		} finally {
 			isSaving.value = false;
 		}
@@ -220,7 +230,6 @@ export function useTestDefinitionForm() {
 		state,
 		fields,
 		isSaving: computed(() => isSaving.value),
-		fieldsIssues: computed(() => fieldsIssues.value),
 		deleteMetric,
 		updateMetrics,
 		loadTestData,

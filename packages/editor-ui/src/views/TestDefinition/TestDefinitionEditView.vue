@@ -1,123 +1,98 @@
 <script setup lang="ts">
-import { computed, onMounted, watch, ref } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import { NODE_PINNING_MODAL_KEY, VIEWS } from '@/constants';
-import { useToast } from '@/composables/useToast';
-import { useI18n } from '@/composables/useI18n';
-import { useAnnotationTagsStore } from '@/stores/tags.store';
-import { useDebounce } from '@/composables/useDebounce';
 import { useTestDefinitionForm } from '@/components/TestDefinition/composables/useTestDefinitionForm';
+import { useDebounce } from '@/composables/useDebounce';
+import { useI18n } from '@/composables/useI18n';
+import { useTelemetry } from '@/composables/useTelemetry';
+import { useToast } from '@/composables/useToast';
+import { NODE_PINNING_MODAL_KEY, VIEWS } from '@/constants';
+import { useAnnotationTagsStore } from '@/stores/tags.store';
+import { computed, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 
-import EvaluationHeader from '@/components/TestDefinition/EditDefinition/EvaluationHeader.vue';
-import DescriptionInput from '@/components/TestDefinition/EditDefinition/DescriptionInput.vue';
-import EvaluationStep from '@/components/TestDefinition/EditDefinition/EvaluationStep.vue';
-import TagsInput from '@/components/TestDefinition/EditDefinition/TagsInput.vue';
-import WorkflowSelector from '@/components/TestDefinition/EditDefinition/WorkflowSelector.vue';
-import MetricsInput from '@/components/TestDefinition/EditDefinition/MetricsInput.vue';
 import type { TestMetricRecord, TestRunRecord } from '@/api/testDefinition.ee';
-import Modal from '@/components/Modal.vue';
-import type { ModalState } from '@/Interface';
-import { useUIStore } from '@/stores/ui.store';
-import TestRunsTable from '@/components/TestDefinition/ListRuns/TestRunsTable.vue';
+import InlineNameEdit from '@/components/InlineNameEdit.vue';
+import ConfigSection from '@/components/TestDefinition/EditDefinition/sections/ConfigSection.vue';
+import RunsSection from '@/components/TestDefinition/EditDefinition/sections/RunsSection.vue';
 import { useTestDefinitionStore } from '@/stores/testDefinition.store.ee';
+import { useUIStore } from '@/stores/ui.store';
+import { useWorkflowsStore } from '@/stores/workflows.store';
+import { useDocumentVisibility } from '@vueuse/core';
+import { N8nButton, N8nIconButton, N8nText } from 'n8n-design-system';
+import type { IDataObject, IPinData } from 'n8n-workflow';
 
 const props = defineProps<{
-	testId?: string;
+	testId: string;
+	name: string;
 }>();
 
 const router = useRouter();
-const route = useRoute();
 const locale = useI18n();
 const { debounce } = useDebounce();
 const toast = useToast();
 const testDefinitionStore = useTestDefinitionStore();
 const tagsStore = useAnnotationTagsStore();
 const uiStore = useUIStore();
+const workflowStore = useWorkflowsStore();
+const telemetry = useTelemetry();
+
+const visibility = useDocumentVisibility();
+watch(visibility, async () => {
+	if (visibility.value !== 'visible') return;
+
+	await tagsStore.fetchAll({ force: true, withUsageCount: true });
+	await getExamplePinnedDataForTags();
+	testDefinitionStore.updateRunFieldIssues(props.testId);
+});
+
 const {
 	state,
-	fieldsIssues,
+	isSaving,
 	cancelEditing,
 	loadTestData,
-	createTest,
 	updateTest,
 	startEditing,
 	saveChanges,
-	handleKeydown,
 	deleteMetric,
 	updateMetrics,
 } = useTestDefinitionForm();
 
 const isLoading = computed(() => tagsStore.isLoading);
-const allTags = computed(() => tagsStore.allTags);
 const tagsById = computed(() => tagsStore.tagsById);
-const testId = computed(() => props.testId ?? (route.params.testId as string));
-const currentWorkflowId = computed(() => route.params.name as string);
+const currentWorkflowId = computed(() => props.name);
+const appliedTheme = computed(() => uiStore.appliedTheme);
+const workflowName = computed(() => workflowStore.workflow.name);
+const hasRuns = computed(() => runs.value.length > 0);
+const fieldsIssues = computed(() => testDefinitionStore.getFieldIssues(props.testId) ?? []);
 
-const tagUsageCount = computed(
-	() => tagsStore.tagsById[state.value.tags.value[0]]?.usageCount ?? 0,
-);
+const showConfig = ref(true);
+const selectedMetric = ref<string>('');
+const examplePinnedData = ref<IPinData>({});
 
-const nodePinningModal = ref<ModalState | null>(null);
-const modalContentWidth = ref(0);
+void loadTestData(props.testId, props.name);
 
-onMounted(async () => {
-	if (!testDefinitionStore.isFeatureEnabled) {
-		toast.showMessage({
-			title: locale.baseText('testDefinition.notImplemented'),
-			type: 'warning',
-		});
-
-		void router.push({
-			name: VIEWS.WORKFLOW,
-			params: { name: router.currentRoute.value.params.name },
-		});
-		return; // Add early return to prevent loading if feature is disabled
-	}
-	void tagsStore.fetchAll({ withUsageCount: true });
-	if (testId.value) {
-		await loadTestData(testId.value);
-	} else {
-		await onSaveTest();
-	}
-});
-
-async function onSaveTest() {
+const handleUpdateTest = async () => {
 	try {
-		let savedTest;
-		if (testId.value) {
-			savedTest = await updateTest(testId.value);
-		} else {
-			savedTest = await createTest(currentWorkflowId.value);
-		}
-		if (savedTest && route.name === VIEWS.NEW_TEST_DEFINITION) {
-			await router.replace({
-				name: VIEWS.TEST_DEFINITION_EDIT,
-				params: { testId: savedTest.id },
-			});
-		}
+		await updateTest(props.testId);
 	} catch (e: unknown) {
 		toast.showError(e, locale.baseText('testDefinition.edit.testSaveFailed'));
 	}
+};
+
+const handleUpdateTestDebounced = debounce(handleUpdateTest, { debounceTime: 400, trailing: true });
+const handleUpdateMetricsDebounced = debounce(
+	async (testId: string) => {
+		await updateMetrics(testId);
+		testDefinitionStore.updateRunFieldIssues(testId);
+	},
+	{ debounceTime: 400, trailing: true },
+);
+
+function getFieldIssues(key: string) {
+	return fieldsIssues.value.filter((issue) => issue.field === key);
 }
 
-function hasIssues(key: string) {
-	return fieldsIssues.value.some((issue) => issue.field === key);
-}
-
-async function onDeleteMetric(deletedMetric: Partial<TestMetricRecord>) {
-	if (deletedMetric.id) {
-		await deleteMetric(deletedMetric.id, testId.value);
-	}
-}
-
-async function handleCreateTag(tagName: string) {
-	try {
-		const newTag = await tagsStore.create(tagName);
-		return newTag;
-	} catch (error) {
-		toast.showError(error, 'Error', error.message);
-		throw error;
-	}
+async function onDeleteMetric(deletedMetric: TestMetricRecord) {
+	await deleteMetric(deletedMetric.id, props.testId);
 }
 
 async function openPinningModal() {
@@ -125,318 +100,218 @@ async function openPinningModal() {
 }
 
 async function runTest() {
-	await testDefinitionStore.startTestRun(testId.value);
-	await testDefinitionStore.fetchTestRuns(testId.value);
+	await testDefinitionStore.startTestRun(props.testId);
+	await testDefinitionStore.fetchTestRuns(props.testId);
+}
+
+async function openExecutionsViewForTag() {
+	const executionsRoute = router.resolve({
+		name: VIEWS.WORKFLOW_EXECUTIONS,
+		params: { name: currentWorkflowId.value },
+		query: { tag: state.value.tags.value[0], testId: props.testId },
+	});
+
+	window.open(executionsRoute.href, '_blank');
 }
 
 const runs = computed(() =>
 	Object.values(testDefinitionStore.testRunsById ?? {}).filter(
-		(run) => run.testDefinitionId === testId.value,
+		(run) => run.testDefinitionId === props.testId,
 	),
 );
 
-async function onDeleteRuns(runs: TestRunRecord[]) {
+const isRunning = computed(() => runs.value.some((run) => run.status === 'running'));
+const isRunTestEnabled = computed(() => fieldsIssues.value.length === 0 && !isRunning.value);
+
+async function onDeleteRuns(toDelete: TestRunRecord[]) {
 	await Promise.all(
-		runs.map(async (run) => {
-			await testDefinitionStore.deleteTestRun({ testDefinitionId: testId.value, runId: run.id });
+		toDelete.map(async (run) => {
+			await testDefinitionStore.deleteTestRun({ testDefinitionId: props.testId, runId: run.id });
 		}),
 	);
 }
 
-// Debounced watchers for auto-saving
-watch(
-	() => state.value.metrics,
-	debounce(async () => await updateMetrics(testId.value), { debounceTime: 400 }),
-	{ deep: true },
-);
+async function renameTag(newName: string) {
+	await tagsStore.rename({ id: state.value.tags.value[0], name: newName });
+}
 
-watch(
-	() => [
-		state.value.description,
-		state.value.name,
-		state.value.tags,
-		state.value.evaluationWorkflow,
-		state.value.mockedNodes,
-	],
-	debounce(onSaveTest, { debounceTime: 400 }),
-	{ deep: true },
-);
+async function getExamplePinnedDataForTags() {
+	const exampleInput = await testDefinitionStore.fetchExampleEvaluationInput(
+		props.testId,
+		state.value.tags.value[0],
+	);
+
+	if (exampleInput !== null) {
+		examplePinnedData.value = {
+			'When called by a test run': [
+				{
+					json: exampleInput as IDataObject,
+				},
+			],
+		};
+	}
+}
+
+watch(() => state.value.tags, getExamplePinnedDataForTags);
+
+const updateName = (value: string) => {
+	state.value.name.value = value;
+	void handleUpdateTestDebounced();
+};
+
+const updateDescription = (value: string) => {
+	state.value.description.value = value;
+	void handleUpdateTestDebounced();
+};
+
+function onEvaluationWorkflowCreated(workflowId: string) {
+	telemetry.track('User created evaluation workflow from test', {
+		test_id: props.testId,
+		subworkflow_id: workflowId,
+	});
+}
 </script>
 
 <template>
-	<div :class="$style.container">
-		<div :class="$style.formContent">
-			<!-- Name -->
-			<EvaluationHeader
-				v-model="state.name"
-				:class="{ 'has-issues': hasIssues('name') }"
-				:start-editing="startEditing"
-				:save-changes="saveChanges"
-				:handle-keydown="handleKeydown"
-			/>
-			<div :class="$style.panelBlock">
-				<!-- Description -->
-				<EvaluationStep
-					:class="$style.step"
-					:title="locale.baseText('testDefinition.edit.description')"
-					:expanded="false"
+	<div v-if="!isLoading" :class="[$style.container, { [$style.noRuns]: !hasRuns }]">
+		<div :class="$style.header">
+			<div style="display: flex; align-items: center">
+				<N8nIconButton
+					icon="arrow-left"
+					type="tertiary"
+					:class="$style.arrowBack"
+					@click="router.push({ name: VIEWS.TEST_DEFINITION, params: { testId } })"
+				></N8nIconButton>
+				<InlineNameEdit
+					:model-value="state.name.value"
+					max-height="none"
+					type="Test name"
+					@update:model-value="updateName"
 				>
-					<template #icon><font-awesome-icon icon="thumbtack" size="lg" /></template>
-					<template #cardContent>
-						<DescriptionInput v-model="state.description" />
+					<N8nText bold size="xlarge" color="text-dark">{{ state.name.value }}</N8nText>
+				</InlineNameEdit>
+			</div>
+			<div style="display: flex; align-items: center; gap: 10px">
+				<N8nText v-if="hasRuns" color="text-light" size="small">
+					{{
+						isSaving
+							? locale.baseText('testDefinition.edit.saving')
+							: locale.baseText('testDefinition.edit.saved')
+					}}
+				</N8nText>
+				<N8nTooltip :disabled="isRunTestEnabled" :placement="'left'">
+					<N8nButton
+						:disabled="!isRunTestEnabled"
+						:class="$style.runTestButton"
+						size="small"
+						data-test-id="run-test-button"
+						:label="locale.baseText('testDefinition.runTest')"
+						type="primary"
+						@click="runTest"
+					/>
+					<template #content>
+						<template v-if="fieldsIssues.length > 0">
+							<div>{{ locale.baseText('testDefinition.completeConfig') }}</div>
+							<div v-for="issue in fieldsIssues" :key="issue.field">- {{ issue.message }}</div>
+						</template>
+						<template v-if="isRunning">
+							{{ locale.baseText('testDefinition.testIsRunning') }}
+						</template>
 					</template>
-				</EvaluationStep>
-
-				<div :class="$style.panelIntro">
-					{{ locale.baseText('testDefinition.edit.step.intro') }}
-				</div>
-				<BlockArrow :class="$style.introArrow" />
-				<!-- Select Executions -->
-				<EvaluationStep
-					:class="$style.step"
-					:title="
-						locale.baseText('testDefinition.edit.step.executions', {
-							adjustToNumber: tagUsageCount,
-						})
-					"
-					:description="locale.baseText('testDefinition.edit.step.executions.description')"
+				</N8nTooltip>
+			</div>
+		</div>
+		<div :class="$style.wrapper">
+			<div :class="$style.description">
+				<InlineNameEdit
+					:model-value="state.description.value"
+					placeholder="Add a description..."
+					:required="false"
+					:autosize="{ minRows: 1, maxRows: 3 }"
+					input-type="textarea"
+					:maxlength="260"
+					max-height="none"
+					type="Test description"
+					:class="$style.editDescription"
+					@update:model-value="updateDescription"
 				>
-					<template #icon><font-awesome-icon icon="history" size="lg" /></template>
-					<template #cardContent>
-						<TagsInput
-							v-model="state.tags"
-							:class="{ 'has-issues': hasIssues('tags') }"
-							:all-tags="allTags"
-							:tags-by-id="tagsById"
-							:is-loading="isLoading"
-							:start-editing="startEditing"
-							:save-changes="saveChanges"
-							:cancel-editing="cancelEditing"
-							:create-tag="handleCreateTag"
-						/>
-					</template>
-				</EvaluationStep>
-				<div :class="$style.evaluationArrows">
-					<BlockArrow />
-					<BlockArrow />
-				</div>
-
-				<!-- Mocked Nodes -->
-				<EvaluationStep
-					:class="$style.step"
-					:title="
-						locale.baseText('testDefinition.edit.step.mockedNodes', {
-							adjustToNumber: state.mockedNodes?.length ?? 0,
-						})
-					"
-					:small="true"
-					:expanded="true"
-					:description="locale.baseText('testDefinition.edit.step.nodes.description')"
-				>
-					<template #icon><font-awesome-icon icon="thumbtack" size="lg" /></template>
-					<template #cardContent>
-						<n8n-button
-							size="small"
-							data-test-id="select-nodes-button"
-							:label="locale.baseText('testDefinition.edit.selectNodes')"
-							type="tertiary"
-							@click="openPinningModal"
-						/>
-					</template>
-				</EvaluationStep>
-
-				<!-- Re-run Executions -->
-				<EvaluationStep
-					:class="$style.step"
-					:title="locale.baseText('testDefinition.edit.step.reRunExecutions')"
-					:small="true"
-					:description="locale.baseText('testDefinition.edit.step.reRunExecutions.description')"
-				>
-					<template #icon><font-awesome-icon icon="redo" size="lg" /></template>
-				</EvaluationStep>
-
-				<!-- Compare Executions -->
-				<EvaluationStep
-					:class="$style.step"
-					:title="locale.baseText('testDefinition.edit.step.compareExecutions')"
-					:description="locale.baseText('testDefinition.edit.step.compareExecutions.description')"
-				>
-					<template #icon><font-awesome-icon icon="equals" size="lg" /></template>
-					<template #cardContent>
-						<WorkflowSelector
-							v-model="state.evaluationWorkflow"
-							:class="{ 'has-issues': hasIssues('evaluationWorkflow') }"
-						/>
-					</template>
-				</EvaluationStep>
-
-				<!-- Metrics -->
-				<EvaluationStep
-					:class="$style.step"
-					:title="locale.baseText('testDefinition.edit.step.metrics')"
-					:description="locale.baseText('testDefinition.edit.step.metrics.description')"
-				>
-					<template #icon><font-awesome-icon icon="chart-bar" size="lg" /></template>
-					<template #cardContent>
-						<MetricsInput
-							v-model="state.metrics"
-							:class="{ 'has-issues': hasIssues('metrics') }"
-							@delete-metric="onDeleteMetric"
-						/>
-					</template>
-				</EvaluationStep>
+					<N8nText size="small" color="text-base">{{ state.description.value }}</N8nText>
+				</InlineNameEdit>
 			</div>
 
-			<n8n-button
-				v-if="state.evaluationWorkflow.value && state.tags.value.length > 0"
-				:class="$style.runTestButton"
-				size="small"
-				data-test-id="run-test-button"
-				:label="locale.baseText('testDefinition.runTest')"
-				type="primary"
-				@click="runTest"
-			/>
-			<n8n-button
-				v-else
-				:class="$style.runTestButton"
-				size="small"
-				data-test-id="run-test-button"
-				:label="'Save Test'"
-				type="primary"
-				@click="onSaveTest"
-			/>
-		</div>
-		<!-- Past Runs Table -->
-		<div v-if="runs.length > 0" :class="$style.runsTable">
-			<N8nHeading size="large" :bold="true" :class="$style.runsTableHeading">{{
-				locale.baseText('testDefinition.edit.pastRuns')
-			}}</N8nHeading>
-			<TestRunsTable
-				:runs="runs"
-				:selectable="true"
-				data-test-id="past-runs-table"
-				@delete-runs="onDeleteRuns"
-			/>
-		</div>
-
-		<Modal ref="nodePinningModal" width="80vw" height="85vh" :name="NODE_PINNING_MODAL_KEY">
-			<template #header>
-				<N8nHeading size="large" :bold="true" :class="$style.runsTableHeading">{{
-					locale.baseText('testDefinition.edit.selectNodes')
-				}}</N8nHeading>
-			</template>
-			<template #content>
-				<NodesPinning
-					v-model="state.mockedNodes"
-					:width="modalContentWidth"
-					data-test-id="nodes-pinning-modal"
+			<div :class="$style.content">
+				<RunsSection
+					v-if="runs.length > 0"
+					v-model:selectedMetric="selectedMetric"
+					:runs="runs"
+					:test-id="testId"
+					:applied-theme="appliedTheme"
+					@delete-runs="onDeleteRuns"
 				/>
-			</template>
-		</Modal>
+
+				<ConfigSection
+					v-model:tags="state.tags"
+					v-model:evaluationWorkflow="state.evaluationWorkflow"
+					v-model:metrics="state.metrics"
+					v-model:mockedNodes="state.mockedNodes"
+					:cancel-editing="cancelEditing"
+					:show-config="showConfig"
+					:tags-by-id="tagsById"
+					:is-loading="isLoading"
+					:get-field-issues="getFieldIssues"
+					:start-editing="startEditing"
+					:save-changes="saveChanges"
+					:has-runs="hasRuns"
+					:example-pinned-data="examplePinnedData"
+					:sample-workflow-name="workflowName"
+					@rename-tag="renameTag"
+					@update:metrics="() => handleUpdateMetricsDebounced(testId)"
+					@update:evaluation-workflow="handleUpdateTestDebounced"
+					@update:mocked-nodes="handleUpdateTestDebounced"
+					@open-pinning-modal="openPinningModal"
+					@delete-metric="onDeleteMetric"
+					@open-executions-view-for-tag="openExecutionsViewForTag"
+					@evaluation-workflow-created="onEvaluationWorkflowCreated($event)"
+				/>
+			</div>
+		</div>
 	</div>
 </template>
 
 <style module lang="scss">
-.container {
-	--evaluation-edit-panel-width: 35rem;
-	width: 100%;
-	height: 100%;
-	overflow: hidden;
-	padding: var(--spacing-s);
-	display: grid;
-	grid-template-columns: minmax(auto, var(--evaluation-edit-panel-width)) 1fr;
-	gap: var(--spacing-2xl);
-}
-
-.formContent {
-	width: 100%;
-	min-width: fit-content;
-	padding-bottom: 10px;
-	overflow: hidden;
+.content {
 	display: flex;
-	flex-direction: column;
-}
-.runsTableTotal {
-	display: block;
-	margin-bottom: var(--spacing-xs);
-}
-.runsTable {
-	flex-shrink: 1;
-	max-width: 100%;
-	max-height: 80vh;
-	overflow: auto;
-}
-.runsTableHeading {
-	display: block;
-	margin-bottom: var(--spacing-xl);
-}
-.panelBlock {
-	max-width: var(--evaluation-edit-panel-width, 35rem);
-	display: grid;
-	overflow-y: auto;
-	min-height: 0;
-}
-.panelIntro {
-	font-size: var(--font-size-m);
-	color: var(--color-text-dark);
-	margin-top: var(--spacing-s);
-	justify-self: center;
-	position: relative;
-	display: block;
-}
-.step {
-	position: relative;
+	justify-content: center;
 
-	&:not(:first-child) {
-		margin-top: var(--spacing-m);
-	}
+	gap: var(--spacing-m);
 }
-.introArrow {
-	--arrow-height: 1.5rem;
-	justify-self: center;
-}
-.evaluationArrows {
-	--arrow-height: 22rem;
+
+.header {
 	display: flex;
 	justify-content: space-between;
-	width: 100%;
-	max-width: 80%;
-	margin: 0 auto;
-	margin-bottom: -100%;
-	z-index: 0;
-}
-.footer {
-	margin-top: var(--spacing-xl);
-	display: flex;
-	justify-content: flex-start;
-}
-
-.workflow {
-	padding: var(--spacing-l);
+	align-items: center;
+	padding: var(--spacing-m) var(--spacing-l);
+	padding-left: 27px;
+	padding-bottom: 8px;
+	position: sticky;
+	top: 0;
+	left: 0;
 	background-color: var(--color-background-light);
-	border-radius: var(--border-radius-large);
-	border: var(--border-base);
+	z-index: 2;
 }
 
-.workflowSteps {
-	display: grid;
-	gap: var(--spacing-2xs);
-	max-width: 42rem;
-	margin: 0 auto;
+.wrapper {
+	padding: 0 var(--spacing-l);
+	padding-left: 58px;
 }
 
-.sideBySide {
-	display: grid;
-	grid-template-columns: 1fr auto 1fr;
-	gap: var(--spacing-2xs);
-	justify-items: end;
-	align-items: start;
+.description {
+	max-width: 600px;
+	margin-bottom: 20px;
 }
-.mockedNodesLabel {
-	min-height: 1.5rem;
-	display: block;
-}
-.runTestButton {
-	margin-top: var(--spacing-m);
+
+.arrowBack {
+	--button-hover-background-color: transparent;
+	border: 0;
 }
 </style>

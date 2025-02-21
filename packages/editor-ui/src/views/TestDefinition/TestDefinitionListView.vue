@@ -1,71 +1,86 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
-import { VIEWS } from '@/constants';
-import { useTestDefinitionStore } from '@/stores/testDefinition.store.ee';
-import { useToast } from '@/composables/useToast';
-import { useI18n } from '@/composables/useI18n';
 import EmptyState from '@/components/TestDefinition/ListDefinition/EmptyState.vue';
-import TestsList from '@/components/TestDefinition/ListDefinition/TestsList.vue';
-import type { TestExecution, TestListItem } from '@/components/TestDefinition/types';
-import { useAnnotationTagsStore } from '@/stores/tags.store';
-import type { TestDefinitionRecord } from '@/api/testDefinition.ee';
+import TestItem from '@/components/TestDefinition/ListDefinition/TestItem.vue';
+import { useI18n } from '@/composables/useI18n';
+import { useMessage } from '@/composables/useMessage';
+import { useToast } from '@/composables/useToast';
+import { MODAL_CONFIRM, VIEWS } from '@/constants';
+import { useTestDefinitionStore } from '@/stores/testDefinition.store.ee';
+import { useAsyncState } from '@vueuse/core';
+import { orderBy } from 'lodash-es';
+import {
+	N8nActionToggle,
+	N8nButton,
+	N8nHeading,
+	N8nIconButton,
+	N8nLoading,
+	N8nTooltip,
+} from 'n8n-design-system';
+import { computed, h } from 'vue';
+import { RouterLink, useRouter } from 'vue-router';
+
+const props = defineProps<{
+	name: string;
+}>();
 
 const router = useRouter();
-const tagsStore = useAnnotationTagsStore();
 const testDefinitionStore = useTestDefinitionStore();
-const isLoading = ref(false);
 const toast = useToast();
 const locale = useI18n();
+const { confirm } = useMessage();
 
-const tests = computed<TestListItem[]>(() => {
-	return (
-		testDefinitionStore.allTestDefinitionsByWorkflowId[
-			router.currentRoute.value.params.name as string
-		] ?? []
-	)
-		.filter((test): test is TestDefinitionRecord => test.id !== undefined)
-		.sort((a, b) => new Date(b?.updatedAt ?? '').getTime() - new Date(a?.updatedAt ?? '').getTime())
-		.map((test) => ({
-			id: test.id,
-			name: test.name ?? '',
-			tagName: test.annotationTagId ? getTagName(test.annotationTagId) : '',
-			testCases: testDefinitionStore.testRunsByTestId[test.id]?.length ?? 0,
-			execution: getTestExecution(test.id),
-		}));
-});
+const { state: tests, isLoading } = useAsyncState(
+	async () => {
+		await testDefinitionStore.fetchAll({ workflowId: props.name });
 
-const hasTests = computed(() => tests.value.length > 0);
-const allTags = computed(() => tagsStore.allTags);
+		const response = testDefinitionStore.allTestDefinitionsByWorkflowId[props.name] ?? [];
+		response.forEach((test) => testDefinitionStore.updateRunFieldIssues(test.id));
 
-function getTagName(tagId: string) {
-	const matchingTag = allTags.value.find((t) => t.id === tagId);
+		return response;
+	},
+	[],
+	{ onError: (error) => toast.showError(error, locale.baseText('testDefinition.list.loadError')) },
+);
 
-	return matchingTag?.name ?? '';
+const listItems = computed(() =>
+	orderBy(tests.value, [(test) => new Date(test.updatedAt ?? test.createdAt)], ['desc']).map(
+		(test) => ({
+			...test,
+			testCases: (testDefinitionStore.testRunsByTestId[test.id] || []).length,
+			lastExecution: testDefinitionStore.lastRunByTestId[test.id] ?? undefined,
+			isTestRunning: isTestRunning(test.id),
+			setupErrors: testDefinitionStore.getFieldIssues(test.id) ?? [],
+		}),
+	),
+);
+
+const commands = {
+	delete: onDeleteTest,
+	edit: onEditTest,
+} as const;
+
+type Action = { label: string; value: keyof typeof commands; disabled: boolean };
+
+const actions = computed<Action[]>(() => [
+	{
+		label: 'Edit test',
+		value: 'edit',
+		disabled: false,
+	},
+	{
+		label: 'Delete',
+		value: 'delete',
+		disabled: false,
+	},
+]);
+
+const handleAction = async (action: string, testId: string) =>
+	await commands[action as Action['value']](testId);
+
+function isTestRunning(testId: string) {
+	return testDefinitionStore.lastRunByTestId[testId]?.status === 'running';
 }
 
-function getTestExecution(testId: string): TestExecution {
-	const lastRun = testDefinitionStore.lastRunByTestId[testId];
-	if (!lastRun) {
-		return {
-			lastRun: null,
-			errorRate: 0,
-			metrics: {},
-			status: 'new',
-		};
-	}
-
-	const mockExecutions = {
-		lastRun: lastRun.updatedAt ?? '',
-		errorRate: 0,
-		metrics: lastRun.metrics ?? {},
-		status: lastRun.status ?? 'running',
-	};
-
-	return mockExecutions;
-}
-
-// Action handlers
 function onCreateTest() {
 	void router.push({ name: VIEWS.NEW_TEST_DEFINITION });
 }
@@ -77,6 +92,11 @@ async function onRunTest(testId: string) {
 			toast.showMessage({
 				title: locale.baseText('testDefinition.list.testStarted'),
 				type: 'success',
+				message: h(
+					RouterLink,
+					{ to: { name: VIEWS.TEST_DEFINITION_EDIT, params: { testId } } },
+					() => 'Go to runs',
+				),
 			});
 
 			// Optionally fetch the updated test runs
@@ -89,15 +109,50 @@ async function onRunTest(testId: string) {
 	}
 }
 
-async function onViewDetails(testId: string) {
-	void router.push({ name: VIEWS.TEST_DEFINITION_RUNS, params: { testId } });
+async function onCancelTestRun(testId: string) {
+	try {
+		const testRunId = testDefinitionStore.lastRunByTestId[testId]?.id;
+		// FIXME: testRunId might be null for a short period of time between user clicking start and the test run being created and fetched. Just ignore it for now.
+		if (!testRunId) {
+			throw new Error('Failed to cancel test run');
+		}
+
+		const result = await testDefinitionStore.cancelTestRun(testId, testRunId);
+		if (result.success) {
+			toast.showMessage({
+				title: locale.baseText('testDefinition.list.testCancelled'),
+				type: 'success',
+			});
+
+			// Optionally fetch the updated test runs
+			await testDefinitionStore.fetchTestRuns(testId);
+		} else {
+			throw new Error('Failed to cancel test run');
+		}
+	} catch (error) {
+		toast.showError(error, locale.baseText('testDefinition.list.testStartError'));
+	}
 }
 
-function onEditTest(testId: number) {
+function onEditTest(testId: string) {
 	void router.push({ name: VIEWS.TEST_DEFINITION_EDIT, params: { testId } });
 }
 
 async function onDeleteTest(testId: string) {
+	const deleteConfirmed = await confirm(
+		locale.baseText('testDefinition.deleteTest.warning'),
+		locale.baseText('testDefinition.deleteTest'),
+		{
+			type: 'warning',
+			confirmButtonText: locale.baseText('generic.delete'),
+			cancelButtonText: locale.baseText('generic.cancel'),
+			closeOnClickModal: true,
+		},
+	);
+
+	if (deleteConfirmed !== MODAL_CONFIRM) {
+		return;
+	}
 	await testDefinitionStore.deleteById(testId);
 
 	toast.showMessage({
@@ -105,81 +160,120 @@ async function onDeleteTest(testId: string) {
 		type: 'success',
 	});
 }
-
-// Load initial data
-async function loadInitialData() {
-	if (!isLoading.value) {
-		// Add guard to prevent multiple loading states
-		isLoading.value = true;
-		try {
-			await Promise.all([
-				tagsStore.fetchAll(),
-				testDefinitionStore.fetchAll({
-					workflowId: router.currentRoute.value.params.name as string,
-				}),
-			]);
-			isLoading.value = false;
-		} catch (error) {
-			toast.showError(error, locale.baseText('testDefinition.list.loadError'));
-		} finally {
-			isLoading.value = false;
-		}
-	}
-}
-
-onMounted(() => {
-	if (!testDefinitionStore.isFeatureEnabled) {
-		toast.showMessage({
-			title: locale.baseText('testDefinition.notImplemented'),
-			type: 'warning',
-		});
-
-		void router.push({
-			name: VIEWS.WORKFLOW,
-			params: { name: router.currentRoute.value.params.name },
-		});
-		return; // Add early return to prevent loading if feature is disabled
-	}
-
-	void loadInitialData();
-});
 </script>
 
 <template>
 	<div :class="$style.container">
-		<div v-if="isLoading" :class="$style.loading">
-			<n8n-loading :loading="true" :rows="3" />
-		</div>
-
+		<N8nLoading v-if="isLoading" loading :rows="3" data-test-id="test-definition-loader" />
+		<EmptyState
+			v-else-if="!listItems.length"
+			data-test-id="test-definition-empty-state"
+			@create-test="onCreateTest"
+		/>
 		<template v-else>
-			<EmptyState
-				v-if="!hasTests"
-				data-test-id="test-definition-empty-state"
-				@create-test="onCreateTest"
-			/>
-			<TestsList
-				v-else
-				:tests="tests"
-				@create-test="onCreateTest"
-				@run-test="onRunTest"
-				@view-details="onViewDetails"
-				@edit-test="onEditTest"
-				@delete-test="onDeleteTest"
-			/>
+			<div :class="$style.header">
+				<N8nHeading size="xlarge" color="text-dark" bold>
+					{{ locale.baseText('testDefinition.list.tests') }}
+				</N8nHeading>
+				<div>
+					<N8nButton
+						:label="locale.baseText('testDefinition.list.createNew')"
+						class="mr-xs"
+						@click="onCreateTest"
+					/>
+					<N8nButton
+						:label="locale.baseText('testDefinition.list.runAll')"
+						disabled
+						type="secondary"
+					/>
+				</div>
+			</div>
+			<div :class="$style.testList" data-test-id="test-definition-list">
+				<TestItem
+					v-for="item in listItems"
+					:key="item.id"
+					:name="item.name"
+					:test-cases="item.testCases"
+					:execution="item.lastExecution"
+					:errors="item.setupErrors"
+					:data-test-id="`test-item-${item.id}`"
+					@click="onEditTest(item.id)"
+				>
+					<template #prepend>
+						<div @click.stop>
+							<N8nTooltip v-if="item.isTestRunning" content="Cancel test run" placement="top">
+								<N8nIconButton
+									icon="stop"
+									type="secondary"
+									size="mini"
+									@click="onCancelTestRun(item.id)"
+								/>
+							</N8nTooltip>
+							<N8nTooltip
+								v-else
+								:disabled="!Boolean(item.setupErrors.length)"
+								placement="top"
+								teleported
+							>
+								<template #content>
+									<div>{{ locale.baseText('testDefinition.completeConfig') }}</div>
+									<div v-for="issue in item.setupErrors" :key="issue.field">
+										- {{ issue.message }}
+									</div>
+								</template>
+								<N8nIconButton
+									icon="play"
+									type="secondary"
+									size="mini"
+									:disabled="Boolean(item.setupErrors.length)"
+									:data-test-id="`run-test-${item.id}`"
+									@click="onRunTest(item.id)"
+								/>
+							</N8nTooltip>
+						</div>
+					</template>
+					<template #append>
+						<div @click.stop>
+							<N8nActionToggle
+								:actions="actions"
+								:data-test-id="`test-actions-${item.id}`"
+								icon-orientation="horizontal"
+								@action="(action) => handleAction(action, item.id)"
+							>
+							</N8nActionToggle>
+						</div>
+					</template>
+				</TestItem>
+			</div>
 		</template>
 	</div>
 </template>
 <style module lang="scss">
 .container {
-	padding: var(--spacing-xl) var(--spacing-l);
 	height: 100%;
 	width: 100%;
 	max-width: var(--content-container-width);
+	margin: auto;
+	padding: var(--spacing-xl) var(--spacing-l);
 }
 .loading {
 	display: flex;
 	justify-content: center;
 	align-items: center;
 	height: 200px;
+}
+
+.testList {
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--color-foreground-base);
+	border-radius: var(--border-radius-base);
+	// gap: 8px;
+}
+
+.header {
+	display: flex;
+	justify-content: space-between;
+	margin-bottom: 20px;
 }
 </style>

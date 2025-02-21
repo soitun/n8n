@@ -136,4 +136,57 @@ describe('useKeybindings', () => {
 		document.dispatchEvent(eventB);
 		expect(handler).toHaveBeenCalledTimes(2);
 	});
+
+	it("should prefer the 'key' over 'code' for dvorak to work correctly", () => {
+		const cHandler = vi.fn();
+		const iHandler = vi.fn();
+		const keymap = ref({
+			'ctrl+c': cHandler,
+			'ctrl+i': iHandler,
+		});
+
+		useKeybindings(keymap);
+
+		const event = new KeyboardEvent('keydown', { key: 'c', code: 'KeyI', ctrlKey: true });
+		document.dispatchEvent(event);
+		expect(cHandler).toHaveBeenCalled();
+		expect(iHandler).not.toHaveBeenCalled();
+	});
+
+	it("should fallback to 'code' for non-ansi layouts", () => {
+		const handler = vi.fn();
+		const keymap = ref({ 'ctrl+c': handler });
+
+		useKeybindings(keymap);
+
+		const event = new KeyboardEvent('keydown', { key: 'ב', code: 'KeyC', ctrlKey: true });
+		document.dispatchEvent(event);
+		expect(handler).toHaveBeenCalled();
+	});
+
+	it('should not call handler when window is blurred, until it is focused back', async () => {
+		const handler = vi.fn();
+		const keymap = ref({ a: handler });
+
+		useKeybindings(keymap);
+
+		const event = new KeyboardEvent('keydown', { key: 'a' });
+		document.dispatchEvent(event);
+
+		expect(handler).toHaveBeenCalled();
+
+		const blurEvent = new Event('blur');
+		window.dispatchEvent(blurEvent);
+
+		document.dispatchEvent(event);
+
+		expect(handler).toHaveBeenCalledTimes(1);
+
+		const focusEvent = new Event('focus');
+		window.dispatchEvent(focusEvent);
+
+		document.dispatchEvent(event);
+
+		expect(handler).toHaveBeenCalledTimes(2);
+	});
 });

@@ -29,6 +29,7 @@ import {
 	faCheckSquare,
 	faChevronDown,
 	faChevronUp,
+	faCircle,
 	faChevronLeft,
 	faChevronRight,
 	faCode,
@@ -53,6 +54,7 @@ import {
 	faEnvelope,
 	faEquals,
 	faEye,
+	faEyeSlash,
 	faExclamationTriangle,
 	faExpand,
 	faExpandAlt,
@@ -81,6 +83,7 @@ import {
 	faHandScissors,
 	faHandPointLeft,
 	faHandshake,
+	faUserCheck,
 	faHashtag,
 	faHdd,
 	faHistory,
@@ -164,6 +167,8 @@ import {
 	faPowerOff,
 	faPaperPlane,
 	faExclamationCircle,
+	faMinusCircle,
+	faAdjust,
 } from '@fortawesome/free-solid-svg-icons';
 import { faVariable, faXmark, faVault, faRefresh } from './custom';
 import { faStickyNote } from '@fortawesome/free-regular-svg-icons';
@@ -204,6 +209,7 @@ export const FontAwesomePlugin: Plugin = {
 		addIcon(faChevronRight);
 		addIcon(faChevronDown);
 		addIcon(faChevronUp);
+		addIcon(faCircle);
 		addIcon(faCode);
 		addIcon(faCodeBranch);
 		addIcon(faCog);
@@ -228,6 +234,7 @@ export const FontAwesomePlugin: Plugin = {
 		addIcon(faEnvelope);
 		addIcon(faEquals);
 		addIcon(faEye);
+		addIcon(faEyeSlash);
 		addIcon(faExclamationTriangle);
 		addIcon(faExclamationCircle);
 		addIcon(faExpand);
@@ -256,6 +263,7 @@ export const FontAwesomePlugin: Plugin = {
 		addIcon(faHandshake);
 		addIcon(faHandPointLeft);
 		addIcon(faHashtag);
+		addIcon(faUserCheck);
 		addIcon(faHdd);
 		addIcon(faHistory);
 		addIcon(faHome);
@@ -342,6 +350,8 @@ export const FontAwesomePlugin: Plugin = {
 		addIcon(faPowerOff);
 		addIcon(faPaperPlane);
 		addIcon(faRefresh);
+		addIcon(faMinusCircle);
+		addIcon(faAdjust);
 
 		app.component('FontAwesomeIcon', FontAwesomeIcon);
 	},

@@ -1,5 +1,5 @@
 import type { FrontendSettings, ITelemetrySettings } from '@n8n/api-types';
-import { GlobalConfig, FrontendConfig, SecurityConfig } from '@n8n/config';
+import { GlobalConfig, SecurityConfig } from '@n8n/config';
 import { Container, Service } from '@n8n/di';
 import { createWriteStream } from 'fs';
 import { mkdir } from 'fs/promises';
@@ -12,7 +12,6 @@ import config from '@/config';
 import { inE2ETests, LICENSE_FEATURES, N8N_VERSION } from '@/constants';
 import { CredentialTypes } from '@/credential-types';
 import { CredentialsOverwrites } from '@/credentials-overwrites';
-import { getVariablesLimit } from '@/environments.ee/variables/environment-helpers';
 import { getLdapLoginLabel } from '@/ldap.ee/helpers.ee';
 import { License } from '@/license';
 import { LoadNodesAndCredentials } from '@/load-nodes-and-credentials';
@@ -45,7 +44,6 @@ export class FrontendService {
 		private readonly instanceSettings: InstanceSettings,
 		private readonly urlService: UrlService,
 		private readonly securityConfig: SecurityConfig,
-		private readonly frontendConfig: FrontendConfig,
 	) {
 		loadNodesAndCredentials.addPostProcessor(async () => await this.generateTypes());
 		void this.generateTypes();
@@ -147,6 +145,7 @@ export class FrontendService {
 				},
 			},
 			publicApi: {
+				apiKeysPerUserLimit: this.license.getApiKeysPerUserLimit(),
 				enabled: isApiEnabled(),
 				latestVersion: 1,
 				path: this.globalConfig.publicApi.path,
@@ -232,8 +231,11 @@ export class FrontendService {
 			security: {
 				blockFileAccessToN8nFiles: this.securityConfig.blockFileAccessToN8nFiles,
 			},
-			betaFeatures: this.frontendConfig.betaFeatures,
 			easyAIWorkflowOnboarded: false,
+			partialExecution: this.globalConfig.partialExecutions,
+			folders: {
+				enabled: false,
+			},
 		};
 	}
 
@@ -326,7 +328,7 @@ export class FrontendService {
 		}
 
 		if (this.license.isVariablesEnabled()) {
-			this.settings.variables.limit = getVariablesLimit();
+			this.settings.variables.limit = this.license.getVariablesLimit();
 		}
 
 		if (this.license.isWorkflowHistoryLicensed() && config.getEnv('workflowHistory.enabled')) {
@@ -360,6 +362,8 @@ export class FrontendService {
 		this.settings.binaryDataMode = config.getEnv('binaryDataManager.mode');
 
 		this.settings.enterprise.projects.team.limit = this.license.getTeamProjectLimit();
+
+		this.settings.folders.enabled = config.get('folders.enabled');
 
 		return this.settings;
 	}

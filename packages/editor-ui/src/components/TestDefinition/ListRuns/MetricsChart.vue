@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, watchEffect } from 'vue';
-import { Line } from 'vue-chartjs';
-import { useMetricsChart } from '../composables/useMetricsChart';
 import type { TestRunRecord } from '@/api/testDefinition.ee';
 import { useI18n } from '@/composables/useI18n';
 import type { AppliedThemeOption } from '@/Interface';
+import { computed, watchEffect } from 'vue';
+import { Line } from 'vue-chartjs';
+import { useMetricsChart } from '../composables/useMetricsChart';
 
 const emit = defineEmits<{
 	'update:selectedMetric': [value: string];
@@ -45,11 +45,11 @@ watchEffect(() => {
 <template>
 	<div v-if="availableMetrics.length > 0" :class="$style.metricsChartContainer">
 		<div :class="$style.chartHeader">
-			<N8nText>{{ locale.baseText('testDefinition.listRuns.metricsOverTime') }}</N8nText>
 			<N8nSelect
 				:model-value="selectedMetric"
 				:class="$style.metricSelect"
 				placeholder="Select metric"
+				size="small"
 				@update:model-value="emit('update:selectedMetric', $event)"
 			>
 				<N8nOption
@@ -74,17 +74,16 @@ watchEffect(() => {
 
 <style lang="scss" module>
 .metricsChartContainer {
-	margin: var(--spacing-m) 0;
 	background: var(--color-background-xlight);
 	border-radius: var(--border-radius-large);
 	box-shadow: var(--box-shadow-base);
 
 	.chartHeader {
 		display: flex;
-		justify-content: space-between;
+		justify-content: flex-start;
 		align-items: center;
-		margin-bottom: var(--spacing-m);
-		padding: var(--spacing-s);
+		gap: var(--spacing-s);
+		padding: var(--spacing-xs) var(--spacing-s);
 		border-bottom: 1px solid var(--color-foreground-base);
 	}
 
@@ -100,7 +99,7 @@ watchEffect(() => {
 
 	.chartWrapper {
 		position: relative;
-		height: 400px;
+		height: var(--metrics-chart-height, 200px);
 		width: 100%;
 		padding: var(--spacing-s);
 	}
